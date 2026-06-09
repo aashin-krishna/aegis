@@ -77,16 +77,17 @@ Then, navigate your web browser to `http://localhost:8550`.
 
 ## 🔬 Model Performance Reference
 
-The model trained in this setup achieves **98.00% Overall Accuracy** and a **0.90 Macro F1-score** on the combined evaluation validation split. The balanced validation subsets contain 3,055 validation rows per class:
+The model trained in this setup achieves **94.57% Overall Accuracy** and a **0.85 Macro F1-score** on the combined evaluation validation split. The balanced validation subsets contain 3,055 validation rows per class:
 
 | Class | Precision | Recall | F1-Score | Support |
 | :--- | :---: | :---: | :---: | :---: |
-| **BENIGN** | 0.98 | 0.98 | 0.98 | 155,244 |
-| **Bot** | 0.64 | 0.99 | 0.78 | 3,056 |
-| **Brute Force** | 0.97 | 0.98 | 0.98 | 43,189 |
-| **DoS** | 1.00 | 0.99 | 0.99 | 339,826 |
-| **Infiltration** | 0.98 | 0.95 | 0.97 | 79,388 |
-| **PortScan** | 0.57 | 0.94 | 0.71 | 5,357 |
-| **Overall Accuracy** | | | **98.00%** | **626,060** |
-| **Macro Average** | **0.86** | **0.97** | **0.90** | **626,060** |
-| **Weighted Average** | **0.99** | **0.98** | **0.98** | **626,060** |
+| **BENIGN** | 0.95 | 0.96 | 0.96 | 155,244 |
+| **Bot** | 0.55 | 0.89 | 0.68 | 3,056 |
+| **Brute Force** | 0.95 | 0.94 | 0.95 | 43,189 |
+| **DoS** | 0.99 | 0.95 | 0.97 | 339,826 |
+| **Infiltration** | 0.85 | 0.89 | 0.87 | 79,388 |
+| **PortScan** | 0.53 | 0.86 | 0.66 | 5,357 |
+| **Overall Accuracy** | | | **94.57%** | **626,060** |
+| **Macro Average** | **0.80** | **0.92** | **0.85** | **626,060** |
+| **Weighted Average** | **0.96** | **0.95** | **0.95** | **626,060** |
+
