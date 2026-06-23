@@ -1061,7 +1061,7 @@ with tab4:
     col_bench3, col_bench4 = st.columns(2)
     with col_bench3:
         st.subheader("LLM Agent Incident Triage Engine Benchmarks")
-        st.markdown("Comparison of collaborative swarms running different foundational LLM instances (60 simulated campaigns):")
+        st.markdown("Comparison of collaborative swarms running different foundational LLM instances (120 simulated campaigns in proof-of-concept evaluation):")
         llm_data = {
             "LLM Engine": ["Ollama Llama-3 (Local)", "Claude 3.5 Sonnet", "GPT-4o", "Mixtral-8x7B (Local)"],
             "Triage Reduction (%)": ["38.5%", "46.2%", "44.8%", "40.1%"],
