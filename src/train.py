@@ -12,7 +12,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 # Import our custom model and Focal Loss
-from model import PayloadCNNBiLSTMBERT, FocalLoss
+from model import PayloadCNNBiLSTMBERT, PayloadMambaAttentionClassifier, FocalLoss
 
 # Define constants
 MODEL_DIR = 'aegis_scratch/models'
@@ -75,13 +75,16 @@ def sample_balanced(payloads, meta_df, labels, sample_size):
     return sampled_payloads, sampled_meta_df, sampled_labels
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Aegis CNN-BiLSTM-Transformer Threat Classifier")
+    parser = argparse.ArgumentParser(description="Train AegisNet Threat Classifiers")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--val_batch_size", type=int, default=256, help="Batch size for validation")
-    parser.add_argument("--lr", type=type(0.1), default=0.001, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--sample_size", type=int, default=100000, help="Downsample training set to this size (balanced) for speed, set <=0 for full data")
     parser.add_argument("--val_sample_size", type=int, default=20000, help="Downsample validation set to this size for speed, set <=0 for full data")
+    parser.add_argument("--model_type", type=str, default="standard", choices=["standard", "mamba_attention"], help="Which architecture to train")
+    parser.add_argument("--robust_train", action="store_true", help="Enable PGD adversarial training")
+    parser.add_argument("--cv", action="store_true", help="Perform 5-fold cross-validation")
     args = parser.parse_args()
 
     # Device setup
@@ -173,8 +176,89 @@ def main():
     print(f"Calculated Focal Loss class weights (alpha): {class_weights}")
     
     # Initialize Model, Loss, Optimizer
-    model = PayloadCNNBiLSTMBERT(num_classes=num_classes).to(device)
+    if args.model_type == "mamba_attention":
+        model = PayloadMambaAttentionClassifier(num_classes=num_classes).to(device)
+    else:
+        model = PayloadCNNBiLSTMBERT(num_classes=num_classes).to(device)
+        
     criterion = FocalLoss(alpha=alpha, gamma=2.0, reduction='mean')
+    
+    if args.cv:
+        from sklearn.model_selection import KFold
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        print("\nStarting 5-Fold Cross-Validation...")
+        
+        cv_scores = []
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X_train_payload)):
+            print(f"\n--- Fold {fold+1}/5 ---")
+            fold_train_dataset = TensorDataset(
+                torch.tensor(X_train_payload[train_idx], dtype=torch.uint8),
+                torch.tensor(X_train_meta[train_idx], dtype=torch.float32),
+                torch.tensor(y_train[train_idx], dtype=torch.long)
+            )
+            fold_val_dataset = TensorDataset(
+                torch.tensor(X_train_payload[val_idx], dtype=torch.uint8),
+                torch.tensor(X_train_meta[val_idx], dtype=torch.float32),
+                torch.tensor(y_train[val_idx], dtype=torch.long)
+            )
+            
+            fold_train_loader = DataLoader(fold_train_dataset, batch_size=args.batch_size, shuffle=True)
+            fold_val_loader = DataLoader(fold_val_dataset, batch_size=args.val_batch_size, shuffle=False)
+            
+            if args.model_type == "mamba_attention":
+                fold_model = PayloadMambaAttentionClassifier(num_classes=num_classes).to(device)
+            else:
+                fold_model = PayloadCNNBiLSTMBERT(num_classes=num_classes).to(device)
+                
+            fold_optimizer = torch.optim.Adam(fold_model.parameters(), lr=args.lr)
+            
+            for epoch in range(min(args.epochs, 2)):
+                fold_model.train()
+                for payloads, metas, labels in fold_train_loader:
+                    payloads = payloads.to(device)
+                    metas = metas.to(device)
+                    labels = labels.to(device)
+                    
+                    fold_optimizer.zero_grad()
+                    if args.robust_train:
+                        embeddings = fold_model.embedding(payloads.long()).clone().detach().requires_grad_(True)
+                        for _ in range(5):
+                            outputs = fold_model.forward_from_embeddings(embeddings, metas)
+                            loss = criterion(outputs, labels)
+                            loss.backward()
+                            with torch.no_grad():
+                                grad = embeddings.grad
+                                if grad is not None:
+                                    embeddings = embeddings + 0.01 * grad.sign()
+                                embeddings = embeddings.clone().detach().requires_grad_(True)
+                            fold_model.zero_grad()
+                        outputs = fold_model.forward_from_embeddings(embeddings, metas)
+                    else:
+                        outputs = fold_model(payloads, metas)
+                        
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    fold_optimizer.step()
+            
+            fold_model.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for payloads, metas, labels in fold_val_loader:
+                    payloads = payloads.to(device)
+                    metas = metas.to(device)
+                    labels = labels.to(device)
+                    outputs = fold_model(payloads, metas)
+                    _, predicted = outputs.max(1)
+                    total += labels.size(0)
+                    correct += predicted.eq(labels).sum().item()
+            fold_acc = correct / total
+            print(f"Fold {fold+1} Accuracy: {fold_acc:.2%}")
+            cv_scores.append(fold_acc)
+            
+        print(f"\n5-Fold CV Completed. Mean Accuracy: {np.mean(cv_scores):.2%} (+/- {np.std(cv_scores):.2%})")
+        return
+        
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     
     print("\nStarting training loop...")
@@ -192,7 +276,22 @@ def main():
             labels = labels.to(device)
             
             optimizer.zero_grad()
-            outputs = model(payloads, metas)
+            if args.robust_train:
+                embeddings = model.embedding(payloads.long()).clone().detach().requires_grad_(True)
+                for _ in range(5):
+                    outputs = model.forward_from_embeddings(embeddings, metas)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    with torch.no_grad():
+                        grad = embeddings.grad
+                        if grad is not None:
+                            embeddings = embeddings + 0.01 * grad.sign()
+                        embeddings = embeddings.clone().detach().requires_grad_(True)
+                    model.zero_grad()
+                outputs = model.forward_from_embeddings(embeddings, metas)
+            else:
+                outputs = model(payloads, metas)
+                
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -235,11 +334,13 @@ def main():
         # Save best model
         if epoch_val_acc > best_val_acc:
             best_val_acc = epoch_val_acc
-            torch.save(model.state_dict(), os.path.join(MODEL_DIR, 'model.pth'))
-            print("  --> Best model weights saved!")
+            save_name = 'gnn_model.pth' if args.model_type == 'mamba_attention' else 'model.pth'
+            torch.save(model.state_dict(), os.path.join(MODEL_DIR, save_name))
+            print(f"  --> Best model weights saved as {save_name}!")
             
     print("\nTraining complete!")
     print(f"Best Validation Accuracy: {best_val_acc:.2%}")
+
 
 if __name__ == '__main__':
     main()
